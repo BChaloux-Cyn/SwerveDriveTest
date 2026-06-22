@@ -1,0 +1,4 @@
+[submodule "122-Swerve-Template"]
+	path = 122-Swerve-Template
+	url = https://github.com/NASAKnights/122-Swerve-Template
+	branch = DEV/brennan/system_core_update
