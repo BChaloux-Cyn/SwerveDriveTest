@@ -5,81 +5,135 @@
 ## Languages
 
 **Primary:**
-- C++17 - All robot logic, subsystems, commands, and hardware interfaces
+- C++23 - All robot program source code (`src/main/cpp/`, `src/main/include/`)
 
 **Secondary:**
-- Gradle (Groovy DSL) - Build system configuration (`build.gradle`, `settings.gradle`)
+- Groovy (Gradle DSL) - Build system configuration (`build.gradle`, `settings.gradle`)
 
 ## Runtime
 
 **Environment:**
-- Root project: WPILib SystemCore platform (NI SystemCore coprocessor target) — `linuxsystemcore`
-- Swerve template subproject: NI roboRIO (`linuxathena`) target
-- Desktop simulation supported on both projects (`includeDesktopSupport = true`)
+- Target (deploy): Linux aarch64 (ARM 64-bit) — NI SystemCore running Debian Bookworm
+- Development/Simulation: Windows x86-64 (desktop simulation)
+- Cross-compile toolchain: `aarch64-bookworm-linux-gnu-g++` from WPILib installation at `C:\Users\Public\wpilib\2027_alpha5\systemcore\bin\`
+- System sysroot: `C:\Users\Public\wpilib\2027_alpha5\systemcore\aarch64-linux-gnu\sysroot\` (GCC 12, C++ stdlib)
 
-**Build Tool:**
-- Gradle with Gradle wrapper (`gradlew`)
-- Root plugin: `org.wpilib.GradleRIO` version `2027.0.0-alpha-6` (alpha/pre-release)
-- Swerve template plugin: `edu.wpi.first.GradleRIO` version `2025.3.2` (stable)
+**C++ Standard:** C++23 (`-std=c++23` on GCC, `/std:c++23preview` on MSVC)
+
+**Package Manager:**
+- Gradle 9.4.1 with GradleRIO plugin
+- Maven local repository: `C:\Users\Public\wpilib\2027_alpha5\maven\`
+- User Gradle cache: `C:\Users\122\.gradle\caches\9.4.1\transforms\`
+- Lockfile: `gradle/wrapper/gradle-wrapper.properties`
 
 ## Frameworks
 
-**Core:**
-- WPILib — FRC robot framework providing `TimedRobot`, `SubsystemBase`, command scheduling, kinematics, odometry, simulation support
-  - Root project uses alpha `2027_alpha5` WPILib year
-  - Swerve template uses stable `2025` WPILib year
-- Commands V2 (`commandsv2`) — WPILib command-based programming framework (vendordep: `vendordeps/CommandsV2.json`)
+**Core — FRC Robot Framework:**
+- WPILib 2027.0.0-alpha-6 (`projectYear: 2027_alpha5`)
+  - GradleRIO plugin version: `2027.0.0-alpha-6` (`build.gradle` line 4)
+  - Provides the full FRC robot programming framework
+  - Docs: https://docs.wpilib.org/en/2027/
+
+**Command-Based Framework:**
+- Commands V2 (vendordep `vendordeps/CommandsV2.json`)
+  - Version: `1.0.0` / artifact version: `wpilib` (resolves to 2027.0.0-alpha-6)
+  - C++ artifact: `org.wpilib.commandsv2:commandsv2-cpp` (shared library)
+  - UUID: `111e20f7-815e-48f8-9dd6-e675ce75b266`
+  - Conflicts with Commands V3 (cannot coexist)
+  - Header cache: `commandsv2-cpp-2027.0.0-alpha-6-headers\`
 
 **Testing:**
-- Google Test (GoogleTest) — C++ unit testing framework, integrated via `wpi.cpp.deps.googleTest(it)` in both projects
-- WPILib HAL initialized before tests (`HAL_Initialize(500, 0)`) in `src/test/cpp/main.cpp`
+- GoogleTest 2027.0.0-alpha-6 — unit test framework for desktop (`src/test/cpp/`)
+  - Included via `wpi.cpp.deps.googleTest(it)` in `build.gradle`
+  - Header cache: `googletest-cpp-2027.0.0-alpha-6-headers\`
 
 **Build/Dev:**
-- WPILib Simulation GUI (`wpi.sim.addGui()`) — desktop simulation with visual interface, enabled by default
-- WPILib Driver Station simulation (`wpi.sim.addDriverstation()`) — available but not default
-- VS Code with `vscode-wpilib` C++ IntelliSense provider (`.vscode/settings.json`)
+- GradleRIO `2027.0.0-alpha-6` — FRC-specific Gradle plugin (deploy, simulation, vendordep resolution)
+- Gradle 9.4.1 — build system (`gradle/wrapper/gradle-wrapper.properties`)
+- VS Code with WPILib extension — IDE (`C_Cpp.default.configurationProvider: vscode-wpilib`, `.vscode/settings.json`)
+- WPILib Simulation GUI (`wpi.sim.addGui().defaultEnabled = true`, `build.gradle` line 50)
+- WPILib Driver Station sim (`wpi.sim.addDriverstation()`, `build.gradle` line 52)
 
-## Key Dependencies
+## Key WPILib Libraries (all version 2027.0.0-alpha-6)
 
-**Critical (Root Project):**
-- WPILib `2027_alpha5` — core robot framework (alpha pre-release); sourced from local WPILib home maven (`C:\Users\Public\wpilib\2027_alpha5\maven` on Windows)
-- Commands V2 (`commandsv2-cpp`) — command scheduler and button/trigger bindings
+All headers resolve from Gradle transform caches under `C:\Users\122\.gradle\caches\9.4.1\transforms\`.
 
-**Critical (Swerve Template — `122-Swerve-Template/`):**
-- WPILib `2025` — core robot framework (stable)
-- CTRE Phoenix 6 Replay `25.3.0` — motor controller and sensor API for TalonFX, CANcoder, Pigeon2 IMU (`vendordeps/Phoenix6-replay-frc2025-latest.json`)
-- PathPlannerLib `2025.2.7` — autonomous path planning and following (`vendordeps/PathplannerLib-2025.2.7.json`)
-- REVLib `2025.0.3` — REV Robotics motor controller support (vendordep present; not actively referenced in observed source) (`vendordeps/REVLib.json`)
-- Studica `2025.0.1` — NavX gyroscope/IMU library (`studica::AHRS`) (`vendordeps/Studica-2025.0.1.json`)
-- Phoenix 5 Replay `5.35.1` — legacy CTRE Phoenix 5 support (`vendordeps/Phoenix5-replay-5.35.1.json`)
+| Library | Artifact | Key Classes / Purpose |
+|---------|----------|-----------------------|
+| **commandsv2-cpp** | `commandsv2-cpp-2027.0.0-alpha-6` | `wpi::cmd::CommandScheduler`, `wpi::cmd::SubsystemBase`, `wpi::cmd::Command`, `wpi::cmd::CommandHelper<>`, `wpi::cmd::CommandPtr`, `wpi::cmd::Trigger`, `wpi::cmd::CommandGamepad`, `wpi::cmd::Sequence()`, `wpi::cmd::RunOnce()` |
+| **wpilibc-cpp** | `wpilibc-cpp-2027.0.0-alpha-6` | `wpi::TimedRobot`, `wpi::StartRobot<>()`, `SmartDashboard`, `SendableChooser`, motor controllers, sensors, `DigitalInput`, `AnalogInput`, `PWMMotorController`, `Encoder`, `PIDController`, `DifferentialDrive`, `MecanumDrive`, `SwerveModuleState`, `SwerveDriveKinematics`, `SwerveDriveOdometry` |
+| **hal-cpp** | `hal-cpp-2027.0.0-alpha-6` | HAL (Hardware Abstraction Layer) — low-level hardware access; `HAL_Initialize()` required before tests (`src/test/cpp/main.cpp`) |
+| **ntcore-cpp** | `ntcore-cpp-2027.0.0-alpha-6` | NetworkTables 4 — `nt::NetworkTableInstance`, `nt::NetworkTable`, publishers/subscribers for DS/dashboard communication |
+| **wpimath-cpp** | `wpimath-cpp-2027.0.0-alpha-6` | Kinematics, odometry, geometry (`Translation2d`, `Rotation2d`, `Pose2d`, `ChassisSpeeds`), trajectory generation, state-space control, PID, feedforward |
+| **datalog-cpp** | `datalog-cpp-2027.0.0-alpha-6` | WPILib DataLog — onboard structured logging to `.wpilog` files |
+| **wpinet-cpp** | `wpinet-cpp-2027.0.0-alpha-6` | Networking utilities — HTTP, WebSockets, used internally by ntcore/cscore |
+| **wpiutil-cpp** | `wpiutil-cpp-2027.0.0-alpha-6` | Shared utilities — `wpi::StringRef`, `wpi::span`, JSON, timestamp, thread utilities |
+| **cameraserver-cpp** | `cameraserver-cpp-2027.0.0-alpha-6` | `CameraServer` — USB/IP camera streaming to Driver Station / Shuffleboard |
+| **cscore-cpp** | `cscore-cpp-2027.0.0-alpha-6` | Camera source/sink pipeline underlying CameraServer |
+| **apriltag-cpp** | `apriltag-cpp-2027.0.0-alpha-6` | AprilTag detection for vision pose estimation |
+| **opencv-cpp** | `opencv-cpp-2027-4.13.0-3` | OpenCV 4.13.0 — computer vision (used by cscore/apriltag) |
+
+## Key WPILib Classes Used Directly in This Project
+
+| Class / Function | Header | Role in Project |
+|-----------------|--------|-----------------|
+| `wpi::TimedRobot` | `wpi/framework/TimedRobot.hpp` | Base class for `Robot` — provides 20ms periodic loop and mode callbacks |
+| `wpi::StartRobot<Robot>()` | (wpilib internal) | Entry point called from `main()` in `src/main/cpp/Robot.cpp` |
+| `wpi::cmd::CommandScheduler` | `wpi/commands2/CommandScheduler.hpp` | Singleton scheduler; `GetInstance().Run()` called every 20ms in `RobotPeriodic()` |
+| `wpi::cmd::CommandPtr` | `wpi/commands2/CommandPtr.hpp` | Owning handle for a command; returned from factories and subsystem methods |
+| `wpi::cmd::Command` | `wpi/commands2/Command.hpp` | Abstract base for all commands |
+| `wpi::cmd::CommandHelper<>` | `wpi/commands2/CommandHelper.hpp` | CRTP wrapper required for command decorator methods to work |
+| `wpi::cmd::SubsystemBase` | `wpi/commands2/SubsystemBase.hpp` | Base class for all subsystems; provides `Periodic()`, `SimulationPeriodic()`, `RunOnce()` |
+| `wpi::cmd::Trigger` | `wpi/commands2/button/Trigger.hpp` | Condition-based command scheduling; `.OnTrue()`, `.WhileTrue()` bindings |
+| `wpi::cmd::CommandGamepad` | `wpi/commands2/button/CommandGamepad.hpp` | Gamepad controller with trigger-returning button methods (e.g., `.EastFace()`) |
+| `wpi::cmd::Sequence()` | `wpi/commands2/Commands.hpp` | Command composition — runs commands sequentially |
+| `HAL_Initialize()` | `wpi/hal/HAL.h` | HAL init required in test harness (`src/test/cpp/main.cpp`) |
+
+## Compiler Flags (SystemCore / Release)
+
+```
+-std=c++23 -Wall -Wextra -Wformat=2 -pedantic -Wno-psabi
+-Wno-unused-parameter -Wno-error=deprecated-enum-enum-conversion
+-fPIC -pthread -D__FIRST_SYSTEMCORE__=1 -O2
+```
+
+Preprocessor macros:
+- `__FIRST_SYSTEMCORE__=1` — defined for all SystemCore builds
+- `RUNNING_WPILIB_TESTS` — defined only when building the test suite (suppresses `main()` in `Robot.cpp`)
 
 ## Configuration
 
-**Robot Identity:**
-- Team number: `122`, stored in `.wpilib/wpilib_preferences.json` and `122-Swerve-Template/.wpilib/wpilib_preferences.json`
-- WPILib project year: `2027_alpha5` (root), `2025` (swerve template)
+**Team Number:** 122 (set in `.wpilib/wpilib_preferences.json`)
+
+**WPILib Installation:**
+- Windows: `C:\Users\Public\wpilib\2027_alpha5\`
+- macOS/Linux: `~/wpilib/2027_alpha5/`
+- Folder name is `2027_alpha5` even for alpha-6 release (by installer design)
 
 **Build:**
-- `build.gradle` — GradleRIO plugin config, deploy targets, source sets, vendor/WPILib deps
-- `settings.gradle` — Gradle plugin management, local WPILib maven repository resolution
-- `vendordeps/*.json` — individual vendor library descriptors pulled at build time
+- `build.gradle` — project build definition, targets, vendordep wiring
+- `settings.gradle` — plugin management, Maven repo pointing to local WPILib maven
+- `gradle/wrapper/gradle-wrapper.properties` — pins Gradle 9.4.1
 
-**Deploy:**
-- Root project deploys to SystemCore at default hostname; static files to `/home/systemcore/deploy/`
-- Swerve template deploys to roboRIO; static files to `/home/lvuser/deploy/`
-- PathPlanner navigation grid and settings deploy as static files (`src/main/deploy/pathplanner/`)
+**Desktop Simulation:**
+- `includeDesktopSupport = true` in `build.gradle` line 44 — enables desktop (Windows) target
+- `wpi.cpp.debugSimulation = false` — simulation runs in release mode by default
+- SimGUI enabled by default; Driver Station sim available but not default
 
 ## Platform Requirements
 
-**Development:**
-- WPILib installation required at `C:\Users\Public\wpilib\2027_alpha5\` (Windows) or `~/wpilib/2027_alpha5/` (Linux/macOS) for root project
-- VS Code with WPILib extension recommended (C++ IntelliSense configured via `vscode-wpilib`)
-- Gradle wrapper included; no separate Gradle installation needed
+**Development (Windows):**
+- Visual Studio 2022 Community (MSVC 14.41, found at `C:\Program Files\Microsoft Visual Studio\2022\Community\`)
+- WPILib 2027.0.0-alpha-6 installer (places files at `C:\Users\Public\wpilib\2027_alpha5\`)
+- VS Code with WPILib extension
+- Java 11+ (required by Gradle, not by robot code)
+- OS: Windows 10/11 x64
 
-**Production:**
-- Root project: NI SystemCore coprocessor running Linux (`linuxsystemcore`)
-- Swerve template: NI roboRIO running Linux (`linuxathena`)
-- CAN bus network for motor controllers and sensors (CTRE CANivore named `"NKCANivore"` used for Pigeon2)
+**Production (Deploy Target):**
+- NI SystemCore (replaces roboRIO) — ARM64 Linux (Debian Bookworm, aarch64)
+- Connected via USB or default hostname (set by `useDefaultSystemcoreHostName()`)
+- Deployed artifact: `build/exe/wpilibUserProgram/linuxsystemcore/release/wpilibUserProgram`
+- Static files deployed to `/home/systemcore/deploy/` on target
 
 ---
 

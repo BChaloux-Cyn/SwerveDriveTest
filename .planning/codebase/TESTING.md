@@ -5,55 +5,40 @@
 ## Test Framework
 
 **Runner:**
-- GoogleTest (GTest) — linked via WPILib's Gradle dependency helper.
-- Root project config: `build.gradle` test suite `wpilibUserProgramTest`, plugin `google-test-test-suite`.
-- Submodule config: `122-Swerve-Template/build.gradle` test suite `frcUserProgramTest`.
-- Both projects use the same GTest runner pattern.
+- Google Test (gtest), integrated via WPILib's GradleRIO Gradle plugin
+- Config: `build.gradle` — `testSuites { wpilibUserProgramTest(GoogleTestTestSuiteSpec) }`
+- Test sources: `src/test/cpp/`
 
 **Assertion Library:**
-- GoogleTest built-in macros (`EXPECT_*`, `ASSERT_*`, `GTEST_*`).
+- Google Test (`gtest/gtest.h`)
 
 **HAL Initialization:**
-- WPILib requires HAL initialization before any hardware-interacting code runs in tests.
-- Both projects initialize HAL in `main()` before running tests.
+- `HAL_Initialize(500, 0)` MUST be called before `RUN_ALL_TESTS()` — required for WPILib simulation layer
+- Entry point: `src/test/cpp/main.cpp`
 
 **Run Commands:**
 ```bash
-./gradlew test                  # Run all tests (root project)
-./gradlew wpilibUserProgramTest # Run tests (root project, explicit target)
-
-cd 122-Swerve-Template
-./gradlew test                  # Run all tests (submodule)
-./gradlew frcUserProgramTest    # Run tests (submodule, explicit target)
+./gradlew test                  # Run all tests (Windows: gradlew.bat test)
+./gradlew runWpilibUserProgramTestWindowsx86-64DebugGoogleTestExe   # Run debug test exe directly
 ```
 
 ## Test File Organization
 
-**Location:**
-- Tests live in a separate directory tree mirroring the main source layout.
-- Root project: `src/test/cpp/`
-- Submodule: `122-Swerve-Template/src/test/cpp/`
+**Location:** `src/test/cpp/` — separate from main sources in `src/main/cpp/`
 
-**Naming:**
-- Test entry point: `main.cpp` (required GTest harness file).
-- Additional test files would follow the pattern `*Test.cpp` or `*_test.cpp` (no additional test files currently exist beyond the harness).
+**Naming:** Test files placed in `src/test/cpp/` with `.cpp` extension; no `.hpp` test headers currently present
 
-**Structure:**
+**Current structure:**
 ```
-src/
-  main/
-    cpp/          # Production code
-    include/      # Production headers
-  test/
-    cpp/          # Test code
-      main.cpp    # GTest + HAL entry point
+src/test/cpp/
+└── main.cpp          # Test runner entry point (HAL init + RUN_ALL_TESTS)
 ```
 
-## Test Entry Point (main.cpp)
+**No test cases are currently written** — only the test runner harness exists. The project is scaffolded for testing but has zero `TEST()` or `TEST_F()` blocks.
 
-Both projects share the identical test harness pattern:
+## Test Entry Point
 
-**Root project** (`src/test/cpp/main.cpp`):
+`src/test/cpp/main.cpp`:
 ```cpp
 #include <wpi/hal/HAL.h>
 #include "gtest/gtest.h"
@@ -66,124 +51,116 @@ int main(int argc, char** argv) {
 }
 ```
 
-**Submodule** (`122-Swerve-Template/src/test/cpp/main.cpp`):
+- Always preserve `HAL_Initialize(500, 0)` before `InitGoogleTest` — WPILib simulation crashes without it
+- Do NOT add a second `main()` — this file is the single entry point for all tests
+
+## Robot Code / Test Separation
+
+The main robot binary guards its `main()` with:
 ```cpp
-#include <hal/HAL.h>
+#ifndef RUNNING_WPILIB_TESTS
+int main() {
+  return wpi::StartRobot<Robot>();
+}
+#endif
+```
+(`src/main/cpp/Robot.cpp` line 77-81)
+
+The `GoogleTestTestSuiteSpec` in `build.gradle` defines `RUNNING_WPILIB_TESTS` automatically when compiling the test suite, preventing duplicate `main()` symbols.
+
+## Build Configuration
+
+From `build.gradle`:
+```groovy
+testSuites {
+    wpilibUserProgramTest(GoogleTestTestSuiteSpec) {
+        testing $.components.wpilibUserProgram   // links against main program sources
+        sources.cpp {
+            source {
+                srcDir 'src/test/cpp'
+                include '**/*.cpp'
+            }
+        }
+        wpi.cpp.vendor.cpp(it)
+        wpi.cpp.deps.wpilib(it)
+        wpi.cpp.deps.googleTest(it)
+    }
+}
+```
+
+Key: `testing $.components.wpilibUserProgram` compiles all main `.cpp` sources into the test binary — no need to re-include them in test files.
+
+## What is Testable (WPILib Simulation Patterns)
+
+**Subsystem logic:**
+- `ExampleSubsystem::ExampleCondition()` returns a boolean — directly unit-testable
+- `Periodic()` / `SimulationPeriodic()` can be called directly in tests after HAL init
+- Hardware abstractions (motors, sensors) should be mocked via WPILib HAL simulation layers for hardware-dependent tests
+
+**Command behavior:**
+- Commands can be tested by instantiating them, calling `Initialize()`, `Execute()`, `IsFinished()` in sequence
+- `wpi::cmd::CommandScheduler` is a singleton — reset between tests with `CommandScheduler::GetInstance().CancelAll()` or by re-initializing
+
+**Auto routines:**
+- `autos::ExampleAuto(subsystem*)` returns a `CommandPtr` — can be scheduled and stepped through in simulation
+
+**What requires HAL simulation:**
+- Any code touching hardware (motors, sensors, encoders) requires HAL sim
+- `HAL_Initialize(500, 0)` in `main.cpp` enables this for all tests in the suite
+
+**What is NOT testable directly:**
+- `wpi::StartRobot<Robot>()` — the full robot loop (runs indefinitely)
+- Actual hardware I/O without WPILib HAL simulation or mock layers
+
+## Writing New Tests
+
+Add `.cpp` files to `src/test/cpp/`. They are automatically included by the `**/*.cpp` glob in `build.gradle`.
+
+Pattern for a new test file:
+```cpp
 #include "gtest/gtest.h"
+#include "subsystems/ExampleSubsystem.hpp"  // project headers via double-quotes
 
-int main(int argc, char** argv) {
-  HAL_Initialize(500, 0);
-  ::testing::InitGoogleTest(&argc, argv);
-  int ret = RUN_ALL_TESTS();
-  return ret;
+TEST(ExampleSubsystemTest, ConditionDefaultsFalse) {
+    ExampleSubsystem subsystem;
+    EXPECT_FALSE(subsystem.ExampleCondition());
 }
 ```
 
-Note: The HAL header path differs — `<wpi/hal/HAL.h>` (root, newer API) vs `<hal/HAL.h>` (submodule, stable API). Use the header that matches the project's GradleRIO version.
-
-`HAL_Initialize(500, 0)` must always precede `InitGoogleTest`. The `500` argument sets the HAL timeout in milliseconds.
-
-## Current Test Coverage
-
-**Actual test cases:** None. Both projects contain only the GTest entry point (`main.cpp`) and no test files with `TEST()` or `TEST_F()` definitions. The test infrastructure is wired up and builds successfully, but no tests are written.
-
-**Build verification:**
-- The Gradle build compiles both production code and test code as separate executables.
-- `wpi.cpp.deps.googleTest(it)` links GTest into the test binary.
-- `testing $.components.wpilibUserProgram` (root) / `testing $.components.frcUserProgram` (submodule) means the test executable is built from the same production sources plus test sources.
-
-## How to Add Tests
-
-Add `.cpp` files to `src/test/cpp/`. They are automatically included via the Gradle glob `include '**/*.cpp'`. No registration or CMakeLists update required.
-
-**Minimal test file example:**
+Pattern for fixture-based tests:
 ```cpp
 #include "gtest/gtest.h"
+#include "subsystems/ExampleSubsystem.hpp"
 
-// Test a pure computation function that does not touch hardware
-TEST(MathUtilNK, DeadbandZeroWhenBelowThreshold) {
-    double result = MathUtilNK::calculateAxis(0.05, 0.15);
-    EXPECT_DOUBLE_EQ(result, 0.0);
-}
-
-TEST(MathUtilNK, DeadbandScalesAboveThreshold) {
-    double result = MathUtilNK::calculateAxis(0.5, 0.15);
-    EXPECT_GT(result, 0.0);
-    EXPECT_LT(result, 1.0);
-}
-```
-
-Include the header for the code under test:
-```cpp
-#include "Constants.hpp"  // for MathUtilNK::calculateAxis
-```
-
-## Mocking
-
-**Framework:** No mocking framework is currently configured (no GMock usage found, though GMock ships with GTest and is available).
-
-**Hardware interaction in tests:**
-- HAL simulation mode is enabled by `HAL_Initialize(500, 0)` — this runs the HAL in simulation mode, allowing motor controller and sensor objects to instantiate without real hardware.
-- Classes that directly construct hardware objects (e.g., `SwerveDrive`, `SwerveModule`) are difficult to unit test directly due to CAN bus initialization requirements.
-- Testable code: pure functions, math utilities, state machine logic, data transformation functions.
-
-**What to test without mocks:**
-- `MathUtilNK::calculateAxis()` in `122-Swerve-Template/src/main/include/Constants.hpp` — pure function, no hardware dependency.
-- Waypoint/path calibration logic in `122-Swerve-Template/PathCalibrator/` Python scripts.
-- Any new utility/math classes that do not hold hardware members.
-
-**What requires simulation or mocks:**
-- Subsystem classes (`SwerveDrive`, `SwerveModule`, `Elevator`, etc.) — instantiate hardware.
-- `RobotContainer` / `Robot` — require full HAL simulation context.
-
-## Fixtures and Factories
-
-**Test Data:** Not established. No fixture files or factory helpers exist.
-
-**Recommended pattern when adding tests:**
-```cpp
-class MathTest : public ::testing::Test {
+class ExampleSubsystemTest : public ::testing::Test {
  protected:
-  double deadband = 0.15;
+  ExampleSubsystem subsystem;
 };
 
-TEST_F(MathTest, BelowDeadbandReturnsZero) {
-    EXPECT_EQ(MathUtilNK::calculateAxis(0.1, deadband), 0.0);
+TEST_F(ExampleSubsystemTest, ConditionDefaultsFalse) {
+  EXPECT_FALSE(subsystem.ExampleCondition());
 }
 ```
 
 ## Coverage
 
-**Requirements:** None enforced. No coverage tooling configured in `build.gradle`.
+**Requirements:** None enforced — no coverage tooling configured.
 
-**View Coverage:**
-- Not currently available. Would require adding `--coverage` GCC flags and a coverage report plugin to Gradle.
+**Current state:** 0 test cases written. Framework fully scaffolded and operational.
 
 ## Test Types
 
 **Unit Tests:**
-- Target: Pure computational logic with no hardware or WPILib scheduler dependencies.
-- Candidates: `MathUtilNK::calculateAxis`, path geometry math, POI distance calculations.
+- Pure logic in subsystem methods (`ExampleCondition`, command `IsFinished`, etc.)
+- No hardware required, no HAL sim calls needed beyond initialization
 
-**Integration Tests (HAL Simulation):**
-- HAL is initialized in the test harness, enabling simulation-mode instantiation of WPILib hardware objects.
-- Subsystem integration tests could verify scheduler interactions using `wpi::cmd::CommandScheduler::GetInstance()`.
+**Simulation Tests:**
+- Tests that invoke periodic methods or hardware abstractions
+- Require `HAL_Initialize` (already present in `main.cpp`)
+- Use WPILib's HAL simulation layer to stub hardware state
 
-**E2E Tests:**
-- Not used. Robot E2E testing is performed by physically deploying to the robot or running WPILib's desktop simulation GUI (launched via `./gradlew simulateNative`).
-
-## Python Tests
-
-No Python test framework (e.g., `pytest`, `unittest`) is configured for the `PathCalibrator/` scripts. The scripts are standalone utilities; tests would be added with a `pytest` setup if needed.
-
-## Simulation Build
-
-The build system also supports a simulation target (separate from tests):
-```bash
-./gradlew simulateNative   # Launch WPILib simulation GUI
-```
-
-This is the primary integration verification method for robot code, not automated tests.
+**E2E / Integration Tests:**
+- Not configured. WPILib does not provide a built-in end-to-end framework; simulation-based integration tests would be added to `src/test/cpp/` alongside unit tests.
 
 ---
 

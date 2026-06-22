@@ -2,190 +2,115 @@
 
 **Analysis Date:** 2026-06-22
 
-## Tech Debt
+---
 
-**Dual-robot project with divergent structure:**
-- Issue: The repo contains two parallel robot programs — a WPILib2025 skeleton in `src/` (root project) and a full-featured FRC swerve drive in the `122-Swerve-Template/` Git submodule. The root `src/` project uses a different command framework (`wpi::cmd`) than the submodule (`frc2::cmd`), making them incompatible codebases. It is unclear which is the authoritative target for development.
-- Files: `src/main/cpp/Robot.cpp`, `122-Swerve-Template/src/main/cpp/Robot.cpp`
-- Impact: Confusion about which codebase to extend; build artifacts in root `build/` suggest the root skeleton is what compiles on this machine, while all real robot logic lives in the submodule.
-- Fix approach: Decide on one canonical project and eliminate or clearly document the other.
+## CRITICAL: Deployment Target Mismatch
 
-**Submodule pinned to a non-main branch:**
-- Issue: `.gitmodules` pins `122-Swerve-Template` to `DEV/brennan/system_core_update`, a developer feature branch rather than a stable main branch. This means upstream merges and releases on `main` are not tracked, and the submodule can silently drift.
-- Files: `.gitmodules`
-- Impact: Risk of consuming an unstable or incomplete branch as the foundation. Harder to receive upstream bug fixes.
-- Fix approach: Pin to a stable release tag or `main` branch; update `.gitmodules` and commit a locked SHA.
+**The deploy configuration targets `SystemCore`, not a raw Raspberry Pi CM5.**
 
-**Dead/commented-out autonomous alignment code:**
-- Issue: Approximately 40 lines of a `scoreClosest` on-the-fly PathPlanner path are commented out in `Robot.cpp`. The `scoreClosest` command in the active binding (`BindCommands()`) at line 251 points to a `scoreClosest` field that is initialized as an empty `frc2::InstantCommand`, making button 3 effectively a no-op.
-- Files: `122-Swerve-Template/src/main/cpp/Robot.cpp` lines 153–191, 250–254
-- Impact: Button 3 on driver controller silently does nothing; future developers may not realize the feature was intended.
-- Fix approach: Restore the commented code as a proper command class, or remove the dead code and button binding.
+- Risk: The `build.gradle` deploy block uses `getTargetTypeClass('SystemCore')` and `useDefaultSystemcoreHostName()`. These GradleRIO helpers assume the target is a FIRST-managed SystemCore device running WPILib's custom OS image with the expected filesystem layout (`/home/systemcore/`, pre-installed HAL libraries, FRC robot startup service, etc.). A raw Raspberry Pi CM5 with a stock Debian/Bookworm image will not have any of this.
+- Files: `build.gradle` lines 9–38
+- Impact: `./gradlew deploy` will fail to connect or fail post-copy because the target user, paths, and startup hooks will not exist on a raw CM5.
+- Fix approach: Either (a) flash the official WPILib SystemCore image onto the CM5 (recommended for alpha testing), or (b) manually configure the CM5 with the expected user accounts, library paths, and systemd service that GradleRIO's `WPILibNativeArtifact` artifact type expects. Option (b) requires reverse-engineering GradleRIO's deploy internals and is not documented.
 
-**NavX gyro is instantiated but unused:**
-- Issue: `SwerveDrive.hpp` declares `studica::AHRS navx{...}` and `SwerveDrive.cpp` calls `navx.Reset()` in the constructor, but all heading reads use `m_pigeon`. Every call site that originally used NavX is commented out.
-- Files: `122-Swerve-Template/src/main/include/subsystems/SwerveDrive.hpp` line 113, `122-Swerve-Template/src/main/cpp/subsystems/SwerveDrive.cpp` lines 45, 247–251
-- Impact: Unnecessary hardware initialization overhead; potential confusion about which IMU is in use; NavX occupies an MXP SPI slot.
-- Fix approach: Remove the `navx` member and all commented NavX references, or restore its use if redundancy is desired.
+---
 
-**Wheel offset system uses SmartDashboard instead of Preferences:**
-- Issue: `SetOffsets()` reads wheel calibration degrees from SmartDashboard via `GetNumber()` with hardcoded defaults (e.g., `-66` for FrontRight). SmartDashboard values are not guaranteed persistent across reboots unless `SetPersistent()` is called, which is done immediately after the read — meaning the first boot after a flash uses hardcoded fallbacks until a manual recalibration is run.
-- Files: `122-Swerve-Template/src/main/cpp/subsystems/SwerveDrive.cpp` lines 511–535
-- Impact: On a fresh roboRIO flash, all wheel offsets default to hardcoded values that may not match the physical robot, causing immediate swerve misalignment.
-- Fix approach: Use `frc::Preferences` (already imported in `Constants.hpp`) with `InitDouble`/`GetDouble` for persistent, flash-safe calibration storage.
+## CRITICAL: HAL Compatibility on Raw Linux
 
-**`SwerveDriveKinematics` initialized twice in constructor:**
-- Issue: In `SwerveDrive.cpp`, `kSwerveKinematics` is first initialized in the member initializer list (line 22), then immediately re-assigned in the constructor body (lines 36–38) with the same values.
-- Files: `122-Swerve-Template/src/main/cpp/subsystems/SwerveDrive.cpp` lines 22–38
-- Impact: Minor inefficiency; double construction of a non-trivial object. Indicates incomplete refactoring.
-- Fix approach: Remove the redundant re-assignment in the constructor body.
+**WPILib HAL is not hardware-agnostic — it requires SystemCore-specific drivers.**
 
-**Commented-out subsystems in Robot (Elevator, Wrist, Climber, LED):**
-- Issue: `Robot.hpp` includes and declares members for `Elevator`, `Wrist`, `Climber`, and `LEDController`, but all are commented out. The submodule still contains all these subsystem implementations, suggesting the robot platform has these mechanisms but they are not wired into the robot program.
-- Files: `122-Swerve-Template/src/main/include/Robot.hpp` lines 75–85, `122-Swerve-Template/src/main/cpp/Robot.cpp` lines 50–58, 94–111
-- Impact: Mechanisms exist in hardware but are not software-controlled; re-enabling requires care around initialization order and safety interlocks.
-- Fix approach: Document which season/game this configuration is for; restore subsystems per competition requirements with proper safety checks.
+- Risk: `wpi::StartRobot<Robot>()` in `src/main/cpp/Robot.cpp` (line 79) initializes the WPILib HAL. On a standard roboRIO or SystemCore, the HAL maps to hardware-specific kernel drivers (for CAN, PWM, DIO, SPI, I2C, analog I/O). On a raw CM5, those kernel modules and device nodes will not exist. The program will panic or segfault at `HAL_Initialize` (also called explicitly in `src/test/cpp/main.cpp` line 3).
+- Files: `src/main/cpp/Robot.cpp` line 79, `src/test/cpp/main.cpp` line 3
+- Impact: The robot program cannot start on bare Linux. Even if the binary transfers successfully, it will crash immediately at runtime.
+- Fix approach: Use the WPILib simulation HAL (`wpi.platforms.desktop` target) for development/testing on a raw Linux host, or confirm that the SystemCore OS image includes the required HAL kernel modules before deploying to CM5.
 
-**`WeightedDriving` marked deprecated but still in public API:**
-- Issue: `WeightedDriving()` in `SwerveDrive` is flagged with a "Warning, this is unfinished (and also deprecated)" comment and annotated `// DEPRECATED` in the header, yet remains as a public method with full implementation.
-- Files: `122-Swerve-Template/src/main/cpp/subsystems/SwerveDrive.cpp` line 415, `122-Swerve-Template/src/main/include/subsystems/SwerveDrive.hpp` line 107
-- Impact: Future developers may call a broken API; the method contains hardcoded magic numbers and incomplete tuning.
-- Fix approach: Remove the method entirely or mark with `[[deprecated("Use Drive() directly")]]` and move to a separate utility file.
+---
 
-## Known Bugs
+## CRITICAL: No Actual Swerve Drive Code
 
-**`AutoWheelOffsets` reads wrong SmartDashboard key format:**
-- Symptoms: `AutoWheelOffsets::Execute()` reads `"Module 1/ CANCoder Angle"` (space before CANCoder), but `SwerveModule::Periodic()` publishes `"Module 1/  CANCoder Angle"` (two-space prefix before CANCoder due to the string `" CANCoder Angle"`). These keys do not match.
-- Files: `122-Swerve-Template/src/main/cpp/commands/AutoWheelOffsets.cpp` lines 45, 50, 55, 60; `122-Swerve-Template/src/main/cpp/subsystems/SwerveModule.cpp` lines 117–118
-- Trigger: Running the AutoWheelOffsets command; it reads 0.0 for all modules and sets all offsets to zero, clearing calibration.
-- Workaround: Manually enter offsets on SmartDashboard.
+**The project is a vanilla WPILib template — no swerve drive subsystem exists.**
 
-**`PoseEstimator::UpdateMeasurement()` unsafe array access:**
-- Symptoms: `robotPoseValue.value.at(0)`, `at(1)`, and `at(2)` are accessed on line 40–42 without checking `robotPoseValue.value.size() > 0` first. If the ROS2Bridge robot pose topic has not published yet, this throws `std::out_of_range`.
-- Files: `122-Swerve-Template/src/main/cpp/subsystems/PoseEstimator.cpp` lines 40–42
-- Trigger: Vision/ROS2 integration enabled but robot pose topic empty on startup.
-- Workaround: Disable vision on startup (`useVision = false`) until ROS2 bridge is confirmed publishing.
+- Risk: Despite being named "SwerveBaseTest", the codebase contains only the auto-generated WPILib command-based skeleton. There is no `SwerveSubsystem`, no swerve module abstraction, no kinematics, no odometry, and no motor/encoder references. The `ExampleSubsystem` does nothing (`ExampleCondition()` always returns `false`, `ExampleMethodCommand()` runs an empty lambda).
+- Files: `src/main/cpp/subsystems/ExampleSubsystem.cpp`, `src/main/include/subsystems/ExampleSubsystem.hpp`
+- Impact: The project cannot drive a robot. All actual swerve logic is presumably in the `122-Swerve-Template` git submodule, which is a separate codebase from a different team and is explicitly out of scope for this project.
+- Fix approach: Integrate swerve drive code from the submodule or implement it directly in `src/main/cpp/subsystems/` and `src/main/include/subsystems/`.
 
-**`SetReference()` uses `|` (bitwise OR) instead of `||` (logical OR):**
-- Symptoms: In `SwerveDrive::SetReference()`, the condition `(!pidX.AtSetpoint() && !pidY.AtSetpoint()) | !hasRun` uses bitwise OR. This technically works on `bool` values in C++ but is non-idiomatic, error-prone on refactor, and may not short-circuit as expected.
-- Files: `122-Swerve-Template/src/main/cpp/subsystems/SwerveDrive.cpp` line 316
-- Trigger: Called during auto alignment routines.
-- Workaround: None needed currently, but fix before adding complex logic around this condition.
+---
 
-**`PoseFilter::lastTimestamp_` is never updated:**
-- Symptoms: `PoseFilter::IsPoseValid()` reads `lastTimestamp_` (line 24) to reject duplicate timestamps, but `lastTimestamp_` is never set after the check — it always remains `std::nullopt`. Duplicate-timestamp rejection never fires.
-- Files: `122-Swerve-Template/src/main/include/utils/PoseFilter.h` lines 24–26, 91
-- Trigger: Any call to `IsPoseValid()`.
-- Workaround: The position and rotation tolerances still filter bad poses, so the filter is partially functional.
+## Alpha Software Stability Risks
 
-**`Elevator::InterpolatePWL()` has no explicit return for empty range:**
-- Symptoms: If `count` is 0 or 1, the for loop never executes and the function falls off the end without returning a value — undefined behavior.
-- Files: `122-Swerve-Template/src/main/cpp/subsystems/Elevator.cpp` line 521–535
-- Trigger: Called with malformed constant arrays.
-- Workaround: `ElevatorConstants` arrays are statically defined and non-empty, so this is latent rather than triggered.
+**GradleRIO `2027.0.0-alpha-6` and WPILib `2027_alpha5` are pre-release software.**
 
-## Security Considerations
+- Risk: The `settings.gradle` pins to `2027_alpha5` local installation path and `build.gradle` requires GradleRIO `2027.0.0-alpha-6`. Alpha releases frequently have breaking API changes between drops. The `wpi/commands2/` namespace (e.g., `wpi::cmd::CommandScheduler`, `wpi::cmd::Trigger`) seen in source files reflects the alpha API surface, which may not be stable or match final 2027 release.
+- Files: `settings.gradle` line 5, `build.gradle` line 4, all headers under `src/main/include/`
+- Impact: Upgrading to a newer alpha or the stable release may require source changes. There is no pinned lockfile for WPILib itself beyond what GradleRIO resolves from the local `wpilibHome` maven directory.
+- Fix approach: Track the WPILib SystemCore Testing GitHub discussions (referenced in `docs/wpilib-installation.md`) for breaking changes between alpha drops. Pin the GradleRIO plugin version explicitly in `build.gradle` (already done at alpha-6) and do not upgrade without testing.
 
-**NetworkTable server started on robot:**
-- Risk: `SwerveDrive.cpp` calls `networkTableInst.StartServer()` in the constructor. On a competition robot, starting a raw NT4 server exposes the robot to any device on the field network; accepted practice in FRC but should be removed for any non-FRC deployment.
-- Files: `122-Swerve-Template/src/main/cpp/subsystems/SwerveDrive.cpp` line 48
-- Current mitigation: FRC field network is physically isolated.
-- Recommendations: No action needed for FRC use; document if reused outside competition context.
+---
 
-**SmartDashboard used to store persistent robot configuration:**
-- Risk: Wheel offsets and POI locations are stored in SmartDashboard persistent entries. Any connected driver station client can modify these values live, inadvertently miscalibrating the robot.
-- Files: `122-Swerve-Template/src/main/cpp/subsystems/SwerveDrive.cpp` lines 511–535, `122-Swerve-Template/src/main/cpp/utils/POIGenerator.cpp` lines 37–43
-- Current mitigation: None.
-- Recommendations: Move safety-critical calibration to `frc::Preferences` and restrict dashboard access during competition.
+## Missing Linux Runtime Configuration
 
-## Performance Bottlenecks
+**No `robot.json` or FRC service configuration exists for the target.**
 
-**`SwerveDrive::Drive()` reads SmartDashboard for acceleration limit every call:**
-- Problem: `Drive()` calls `frc::SmartDashboard::GetNumber("drive/accelLim", 2.0)` and `GetNumber("drive/vx")` / `GetNumber("drive/vy")` every 20 ms loop. SmartDashboard reads involve network table lookups and are not zero-cost.
-- Files: `122-Swerve-Template/src/main/cpp/subsystems/SwerveDrive.cpp` lines 181–183
-- Cause: Tuning values left in SmartDashboard reads in production code.
-- Improvement path: Cache the acceleration limit as a member variable updated only when the dashboard value changes; store previous vx/vy as member fields rather than reading them back from the dashboard.
+- Risk: WPILib's robot startup mechanism on SystemCore relies on a `robot.json` configuration file and a systemd service managed by the WPILib deployment infrastructure. No such file exists in this project. The deploy artifact type `WPILibNativeArtifact` likely generates or expects this file on the target, but there is no local source for it.
+- Files: Absent — no `robot.json` anywhere under `src/`
+- Impact: Even if the binary is manually copied to the CM5, it will not auto-start on boot without the correct systemd unit configuration.
+- Fix approach: If deploying via GradleRIO to a proper SystemCore image, the deploy plugin handles this. If deploying manually to raw CM5, create a systemd service unit that runs the compiled binary with appropriate permissions and restart policy.
 
-**`SwerveModule::Periodic()` publishes 4 SmartDashboard values per module (16 total per cycle):**
-- Problem: Each of 4 modules publishes angle, CANCoder angle, velocity, and rotations to SmartDashboard every 20 ms, totaling 16 NT4 publishes per loop tick.
-- Files: `122-Swerve-Template/src/main/cpp/subsystems/SwerveModule.cpp` lines 113–124
-- Cause: Debug telemetry left enabled in production code.
-- Improvement path: Gate all telemetry behind a compile-time or NT-toggled debug flag.
+---
 
-## Fragile Areas
+## Tech Debt: Empty Deploy Directory
 
-**Vision pose fusion relies on ROS2 bridge being available:**
-- Files: `122-Swerve-Template/src/main/cpp/subsystems/SwerveDrive.cpp` lines 330–382, `122-Swerve-Template/src/main/include/subsystems/SwerveDrive.hpp`
-- Why fragile: `useVision` defaults to `true`. If the ROS2 coprocessor is offline or hasn't published yet, `UpdatePoseEstimate()` runs but `baseLink1Subscribe.GetAtomic()` returns empty arrays — this is handled safely. However, `PoseEstimator.cpp` (the object pose estimator) does not guard `robotPoseSubscribe.GetAtomic().value.at(0)` access.
-- Safe modification: Always check `.value.size() > 0` before indexing any NT subscriber result; add a `useVision` guard in `PoseEstimator::UpdateMeasurement()`.
-- Test coverage: None — no unit tests exist for vision pipeline.
+**`src/main/deploy/` contains only a placeholder text file.**
 
-**Elevator subsystem height sensing uses complex multi-sensor fusion:**
-- Files: `122-Swerve-Template/src/main/cpp/subsystems/Elevator.cpp` lines 287–366, `122-Swerve-Template/src/main/include/subsystems/Elevator.h`
-- Why fragile: Height is fused from two SparkMax encoders, a CANdi Hall sensor, and a proximity sensor. The auto-calibration logic in `AutoCalibrateHeight()` silently resets `m_heightCorrection` on calibration failure. The emergency tolerance check for encoder divergence is commented out (`lines 242–247`), meaning a broken chain/belt will not be caught.
-- Safe modification: Re-enable the emergency encoder divergence check before operating on a physical robot; add a maximum voltage clamp as a secondary safety.
-- Test coverage: None.
+- Issue: `src/main/deploy/example.txt` is the only file in the deploy tree. The deploy block in `build.gradle` (line 30–35) copies this entire directory to `/home/systemcore/deploy` on the target. This is placeholder content from the WPILib project template and has no functional value.
+- Files: `src/main/deploy/example.txt`, `build.gradle` lines 30–35
+- Impact: No immediate runtime impact, but the deploy directory must be populated with any config files (e.g., path planner trajectories, calibration data) the robot program will read at runtime via `wpi::filesystem::GetDeployDirectory()`.
+- Fix approach: Remove `example.txt` and add real deploy files as the robot program requires them, or set `deleteOldFiles = false` (already set) to avoid stale file cleanup issues.
 
-**`POIGenerator::GetClosestPOI()` returns `(0,0,0)` silently when no POIs exist:**
-- Files: `122-Swerve-Template/src/main/cpp/utils/POIGenerator.cpp` line 75–78
-- Why fragile: Callers cannot distinguish "no POIs loaded" from a valid POI at field origin (0,0). The commented-out `scoreClosest` command in `Robot.cpp` relies on this return value for path planning.
-- Safe modification: Return `std::optional<frc::Pose2d>` and update callers to handle the empty case explicitly.
-- Test coverage: None.
+---
 
-## Scaling Limits
+## Tech Debt: Version Mismatch Between Preferences and GradleRIO
 
-**Hard limit of 4 swerve modules:**
-- Current capacity: `SwerveDrive` uses `std::array<SwerveModule, 4>` and all kinematics are templated on `4U`.
-- Limit: Changing module count requires updating array size, kinematics template parameter, and all index-based loops throughout `SwerveDrive.cpp`.
-- Scaling path: Parameterize module count as a compile-time constant; prefer ranged-for loops over index loops.
+**`.wpilib/wpilib_preferences.json` declares `2027_alpha5` but GradleRIO plugin is alpha-6.**
 
-## Dependencies at Risk
+- Issue: `.wpilib/wpilib_preferences.json` sets `projectYear` to `"2027_alpha5"`, while `build.gradle` uses GradleRIO version `2027.0.0-alpha-6` and `settings.gradle` also references `2027_alpha5` as the local installation folder name. The folder name `2027_alpha5` is a quirk of the installer (noted in `docs/wpilib-installation.md`), so this is intentional but confusing.
+- Files: `.wpilib/wpilib_preferences.json` line 4, `build.gradle` line 4, `settings.gradle` line 5
+- Impact: No build impact since the folder name is what matters for local maven resolution. However, it creates confusion when reading project metadata — the year string and the actual plugin version do not match.
+- Fix approach: Document this discrepancy explicitly (as done in `docs/wpilib-installation.md`). Accept as a known quirk of the alpha installer.
 
-**Submodule from a team-specific development branch:**
-- Risk: `122-Swerve-Template` is sourced from `NASAKnights/122-Swerve-Template` at `DEV/brennan/system_core_update`. This branch may be force-pushed, rebased, or deleted at any time.
-- Impact: `git submodule update` could fail or silently pick up incompatible code.
-- Migration plan: Pin to a stable tag; maintain a fork if long-term stability is needed.
-
-**WPILib 2025.3.2 (GradleRIO) with CTRE Phoenix6 and REV Spark:**
-- Risk: FRC vendor dependencies (CTRE Phoenix6, REV SparkMax, PathPlanner, StudicaLib) must be updated in lockstep with each WPILib season release. Mixing versions causes runtime CANbus communication failures.
-- Impact: An incomplete vendor dependency update breaks all motor/sensor communication.
-- Migration plan: Update all vendordeps together using the WPILib VS Code extension or `./gradlew vendorDependencies` at the start of each season.
-
-## Missing Critical Features
-
-**No unit or integration tests:**
-- Problem: The only test file is `src/test/cpp/main.cpp` (root project, 10 lines — Google Test boilerplate with no test cases) and `122-Swerve-Template/src/test/cpp/main.cpp` (identical). No subsystem, command, or utility has any test coverage.
-- Blocks: Regression detection for kinematics, PID tuning, and pose estimation logic.
-
-**Autonomous start pose is never set:**
-- Problem: `Robot::AutonomousInit()` calls `m_swerveDrive.ResetPose(autoStartPose)` but `autoStartPose` is declared as `frc::Pose2d autoStartPose` in `Robot.hpp` with no initialization — it defaults to `(0,0,0°)`. PathPlanner autos that assume a specific starting pose will mislocalize from the start.
-- Files: `122-Swerve-Template/src/main/include/Robot.hpp` line 133, `122-Swerve-Template/src/main/cpp/Robot.cpp` line 78
-- Blocks: Multi-path autonomous routines requiring accurate initial pose.
-
-**`SetFast()` and `SetSlow()` are empty stubs:**
-- Problem: `SwerveDrive::SetFast()` and `SwerveDrive::SetSlow()` have empty bodies. No speed-scaling mechanism exists for "slow mode" (e.g., when elevator is raised).
-- Files: `122-Swerve-Template/src/main/cpp/subsystems/SwerveDrive.cpp` lines 243–245
-- Blocks: Safe operation at height — a raised elevator raises the center of gravity significantly.
+---
 
 ## Test Coverage Gaps
 
-**All subsystems lack unit tests:**
-- What's not tested: `SwerveDrive`, `SwerveModule`, `Elevator`, `PoseFilter`, `PoseEstimator`, `POIGenerator`
-- Files: All `.cpp` files under `122-Swerve-Template/src/main/cpp/subsystems/` and `utils/`
-- Risk: Kinematics bugs, PID value errors, sensor fusion logic errors go undetected until physical testing.
-- Priority: High
+**Only a HAL initialization stub exists — no actual tests are written.**
 
-**`PoseFilter` correctness is entirely untested:**
-- What's not tested: The timestamp deduplication bug and queue-fill-before-accepting logic are not exercised in any test.
-- Files: `122-Swerve-Template/src/main/include/utils/PoseFilter.h`
-- Risk: Bad vision poses accepted during startup; robot teleports or misestimates position.
-- Priority: High
+- What's not tested: All robot logic, command scheduling, subsystem behavior, and autonomous routines.
+- Files: `src/test/cpp/main.cpp` (only test file — 10 lines, initializes HAL and runs GoogleTest with no registered test cases)
+- Risk: Any logic added to `ExampleSubsystem`, `RobotContainer`, or future swerve subsystems will ship completely untested.
+- Priority: Medium (acceptable for early template stage; becomes High once real robot logic is added)
 
-**Elevator height fusion is untested:**
-- What's not tested: `GetFusedHeight()`, `GetHallHeight()`, `AutoCalibrateHeight()`, `InterpolatePWL()`
-- Files: `122-Swerve-Template/src/main/cpp/subsystems/Elevator.cpp` lines 287–535
-- Risk: Height miscalculation leads to dangerous carriage movement outside physical bounds.
-- Priority: High
+---
+
+## Dependencies at Risk: CommandsV2 vs CommandsV3 Conflict Guard
+
+**`vendordeps/CommandsV2.json` hardcodes a conflict check against a CommandsV3 UUID.**
+
+- Risk: The vendordep declares a `conflictsWith` entry for `CommandsV3.json` with UUID `4decdc05-a056-46cf-9561-39449bbb01306`. If CommandsV3 is ever added to the project (possible as the alpha library evolves), the build will fail with an error. The `mavenUrls` array is empty, meaning this vendordep resolves only from the local WPILib installation and not from any remote maven — the project cannot build without the local `2027_alpha5` WPILib installation present on the build machine.
+- Files: `vendordeps/CommandsV2.json`
+- Impact: The project is not portable to a CI environment without the full 2.7 GB WPILib installer being run first. There is no online fallback URL.
+- Fix approach: Accept as a constraint of alpha WPILib development. Ensure all build machines run the WPILib installer before attempting a build. Consider adding a `mavenUrls` entry if WPILib publishes alpha artifacts to an online maven repository in future drops.
+
+---
+
+## Submodule Coupling Risk
+
+**The `122-Swerve-Template` submodule is pinned to a non-stable branch.**
+
+- Risk: `.gitmodules` pins the submodule to branch `DEV/brennan/system_core_update` — a development branch on an external team's repo. This branch can be force-pushed, rebased, or deleted without notice, which would break `git submodule update` for anyone cloning this repo.
+- Files: `.gitmodules` lines 1–4
+- Impact: Any developer doing a fresh clone and running `git submodule update --init --recursive` may get different code than the original developer, or may get an error if the branch is deleted.
+- Fix approach: Pin the submodule to a specific commit SHA rather than a branch name. Update the SHA intentionally when pulling in upstream changes.
 
 ---
 

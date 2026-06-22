@@ -2,187 +2,115 @@
 
 **Analysis Date:** 2026-06-22
 
-## Project Structure
-
-This repository has two C++ WPILib robot projects:
-
-- **Root project** (`src/`): A base WPILib Command-based template targeting the newer SystemCore platform (GradleRIO `2027.0.0-alpha-6`, plugin `org.wpilib.GradleRIO`).
-- **Submodule** (`122-Swerve-Template/src/`): A full competition robot targeting RoboRIO (GradleRIO `2025.3.2`, plugin `edu.wpi.first.GradleRIO`). This is the primary codebase with real logic.
-
-Both use C++17 with WPILib's Command-based framework.
-
 ## Naming Patterns
 
 **Files:**
-- Header files use `.hpp` for classes that include template or inline code (e.g., `SwerveDrive.hpp`, `SwerveModule.hpp`, `Constants.hpp`).
-- Header files use `.h` for simpler subsystem/command headers (e.g., `Climber.h`, `Elevator.h`, `Turret.h`).
-- Implementation files always use `.cpp`.
-- File names match the class name exactly (e.g., `SwerveDrive.hpp` contains `class SwerveDrive`).
-- Underscore in file names appears when two related concepts join: `LED_Groups.h`, `Turret_Shooter.h`.
+- Header files use `.hpp` extension: `Robot.hpp`, `ExampleSubsystem.hpp`, `Constants.hpp`
+- Source files use `.cpp` extension: `Robot.cpp`, `ExampleSubsystem.cpp`
+- File names match their primary class name exactly (PascalCase): `ExampleSubsystem.hpp` contains `ExampleSubsystem`
+- Free-function namespace files use camelCase namespace name: `Autos.hpp` / `Autos.cpp` for namespace `autos`
 
 **Classes:**
-- PascalCase: `SwerveDrive`, `SwerveModule`, `RobotContainer`, `ExampleSubsystem`, `POIGenerator`, `PoseFilter`, `PoseEstimator`.
+- PascalCase for all class names: `Robot`, `RobotContainer`, `ExampleSubsystem`, `ExampleCommand`
+- Commands extend `wpi::cmd::CommandHelper<wpi::cmd::Command, DerivedClass>` — NOT `wpi::cmd::Command` directly
+- Subsystems extend `wpi::cmd::SubsystemBase`
+- Robot extends `wpi::TimedRobot`
 
-**Methods (Member Functions):**
-- PascalCase: `GetPose()`, `ResetHeading()`, `SetDesiredState()`, `BindCommands()`, `UpdateDashboard()`, `Periodic()`, `SimulationPeriodic()`.
-- Boolean query methods use no prefix: `ExampleCondition()`, `atSetpoint()` (lowercase `a` is inconsistent — most use PascalCase).
-- Factory methods follow WPILib convention: `ExampleMethodCommand()`, `GetAutonomousCommand()`.
+**Methods:**
+- PascalCase for all public methods (WPILib convention): `RobotPeriodic()`, `ExampleMethodCommand()`, `ConfigureBindings()`
+- Private helper methods also PascalCase: `ConfigureBindings()`
+- Override methods retain WPILib PascalCase names: `Periodic()`, `SimulationPeriodic()`
 
-**Variables — Member Fields:**
-- WPILib convention uses `m_` prefix for private member variables: `m_driveMotor`, `m_steerEncoder`, `m_angleOffset`, `m_pigeon`, `m_poseEstimator`, `m_simTimer`.
-- Some members omit the prefix: `navx`, `speeds`, `pidX`, `pidY`, `pidRot`, `hasRun`, `enable`.
-- This is inconsistent — the `m_` prefix is preferred per WPILib convention.
-
-**Variables — Local / Parameters:**
-- camelCase: `driveMotorId`, `steerMotorId`, `leftXAxis`, `rightXAxis`, `driveConfig`, `steerConfig`.
-
-**Constants:**
-- Constants inside namespaces use the `k` prefix + PascalCase: `kDriverPort`, `kMaxTranslationalVelocity`, `kDriveP`, `kFrontLeftOffset`.
-- String key constants use `inline constexpr std::string_view` and follow the same `k` prefix pattern: `kFrontLeftOffsetKey`.
-- PID tuning constants (`kP`, `kI`, `kD`, `kS`, `kV`, `kA`) map to CTRE's naming convention.
+**Variables and Members:**
+- Private member variables use camelCase without prefix: `autonomousCommand`, `driverController`, `subsystem`
+- Constants use `k` prefix in camelCase: `kDriverControllerPort`
+- `inline constexpr` used for compile-time constants
 
 **Namespaces:**
-- Constants are grouped into domain namespaces: `ElectricalConstants`, `DriveConstants`, `ModuleConstants`, `MathUtilNK`, `OperatorConstants`.
-- Command factory functions use namespaces: `autos::ExampleAuto(...)`.
-- WPILib types are accessed via `wpi::cmd::` (newer template) or `frc2::` / `frc::` (submodule).
+- Constants are grouped in subsystem-specific namespaces within `Constants.hpp`: `namespace OperatorConstants { ... }`
+- Free-function groups (auto factories) use lowercase namespaces: `namespace autos { ... }`
+- WPILib types accessed via `wpi::cmd::` and `wpi::` prefixes
+
+## Header/Source Separation (WPILib Pattern)
+
+**Headers:** `src/main/include/` — class declarations only
+- Subsystem headers: `src/main/include/subsystems/ExampleSubsystem.hpp`
+- Command headers: `src/main/include/commands/ExampleCommand.hpp`
+- Namespace function headers: `src/main/include/commands/Autos.hpp`
+- Robot-wide: `src/main/include/Robot.hpp`, `src/main/include/RobotContainer.hpp`
+- Constants: `src/main/include/Constants.hpp` (all `inline constexpr` — no `.cpp` needed)
+
+**Sources:** `src/main/cpp/` — method implementations only
+- Mirror subdirectory structure of `include/`
+- Include their own header first: `#include "Robot.hpp"` then WPILib headers
+
+**Include style:**
+- Project headers use double-quotes: `#include "RobotContainer.hpp"`
+- WPILib and system headers use angle brackets: `#include <optional>`
+- All headers use `#pragma once` (not include guards)
+
+## WPILib Inheritance Patterns
+
+**Robot class** (`src/main/cpp/Robot.cpp`, `src/main/include/Robot.hpp`):
+- Inherits `wpi::TimedRobot`
+- Override all lifecycle methods: `RobotPeriodic`, `DisabledInit`, `DisabledPeriodic`, `AutonomousInit`, `AutonomousPeriodic`, `TeleopInit`, `TeleopPeriodic`, `UtilityPeriodic`, `SimulationInit`, `SimulationPeriodic`
+- Entry point guarded by `#ifndef RUNNING_WPILIB_TESTS` to allow test compilation without `main()` conflict
+- Uses `std::optional<wpi::cmd::CommandPtr>` for autonomous command to avoid undefined behavior
+
+**Subsystem classes** (`src/main/include/subsystems/`, `src/main/cpp/subsystems/`):
+- Inherit `wpi::cmd::SubsystemBase`
+- Override `Periodic()` for 20ms loop logic
+- Override `SimulationPeriodic()` for simulation-specific updates
+- Expose command factory methods (return `wpi::cmd::CommandPtr`) as public interface
+- Hardware components (motors, sensors) declared `private`; accessed only via public methods
+
+**Command classes** (`src/main/include/commands/`, `src/main/cpp/commands/`):
+- Inherit `wpi::cmd::CommandHelper<wpi::cmd::Command, DerivedClass>` — CRTP pattern required for `.ToPtr()` decorator to work
+- Receive subsystem pointer via `explicit` constructor parameter
+- Store subsystem pointer as private member
+
+**Auto factories** (`src/main/include/commands/Autos.hpp`):
+- Free functions in a namespace, not a class
+- Return `wpi::cmd::CommandPtr`
+- Compose commands using `wpi::cmd::Sequence()`, `wpi::cmd::Parallel()`, etc.
+
+## RobotContainer Pattern
+
+`src/main/include/RobotContainer.hpp` / `src/main/cpp/RobotContainer.cpp`:
+- Owns all subsystem instances as private value members (not pointers): `ExampleSubsystem subsystem;`
+- Owns controller instances as private value members with inline initialization from constants: `wpi::cmd::CommandGamepad driverController{OperatorConstants::kDriverControllerPort};`
+- `ConfigureBindings()` is a private method called from constructor
+- Trigger bindings use lambda captures of `this` or subsystem pointer
+- `GetAutonomousCommand()` is the only public method besides the constructor
 
 ## Code Style
 
 **Formatting:**
-- No `.clang-format` file detected; formatting is done manually.
-- Opening braces for class/function bodies: two styles coexist.
-  - Root project: opening brace on the same line: `void Robot::RobotPeriodic() {`
-  - Submodule: opening brace on a new line: `void Robot::RobotPeriodic()\n{`
-- Indentation: 2 spaces (root project), 4 spaces (submodule). **Use 4 spaces in the submodule, 2 in the root project.**
-- Public/private access specifiers are indented 2 spaces inside class body.
+- 2-space indentation throughout
+- No trailing spaces
+- Opening brace on same line as declaration: `class Robot : public wpi::TimedRobot {`
+- Method body on same line for empty bodies: `void DisabledInit() {}`, `Robot::Robot() {}`
+- Single blank line between method definitions in `.cpp` files
 
-**Linting:**
-- No `.clang-tidy` or other linting config detected. Rely on compiler warnings.
-
-## Include Organization
-
-**Order (submodule pattern):**
-1. Standard library headers (`<cmath>`, `<array>`, `<string>`, `<optional>`)
-2. Vendor/external library headers (`<ctre/...>`, `<frc/...>`, `<frc2/...>`, `<pathplanner/...>`, `<units/...>`, `<networktables/...>`)
-3. Project-local headers (`"Constants.hpp"`, `"subsystems/SwerveDrive.hpp"`, `"utils/POIGenerator.h"`)
-
-All `#include` directives in headers are angle-bracket form for vendor libs and quoted form for project files.
-
-**Header Guards:**
-- Use `#pragma once` (not traditional `#ifndef` guards) universally throughout the project.
-
-## Class Design
-
-**Subsystems:**
-- All subsystems inherit from `frc2::SubsystemBase` (submodule) or `wpi::cmd::SubsystemBase` (root).
-- Hardware components (motor controllers, encoders, sensors) are declared `private`.
-- Public API exposes only methods — no public hardware members.
-- Every subsystem overrides `Periodic()` and `SimulationPeriodic()`.
-
-**Commands:**
-- Commands inherit via the CRTP helper: `wpi::cmd::CommandHelper<wpi::cmd::Command, DerivedClass>`.
-- `explicit` keyword used on single-argument constructors: `explicit ExampleCommand(ExampleSubsystem* subsystem)`.
-- Subsystem raw pointers passed to commands (not references or smart pointers).
-- `AddRequirements(subsystem)` called in constructor body.
-
-**Robot Class:**
-- Extends `frc::TimedRobot` (submodule) or `wpi::TimedRobot` (root).
-- Robot lifecycle methods (`RobotInit`, `RobotPeriodic`, `AutonomousInit`, etc.) are all overrides.
-- Hardware/subsystem initialization extracted into `CreateRobot()` private method (submodule pattern).
-- Button bindings extracted into `BindCommands()` private method.
-
-## Constants File Pattern
-
-Constants live entirely in `src/main/include/Constants.hpp`. Never in `.cpp` files.
-
-```cpp
-namespace ElectricalConstants {
-    const int kFrontLeftDriveMotorID = 10;
-    // ...
-}
-
-namespace DriveConstants {
-    const auto kMaxTranslationalVelocity = units::meters_per_second_t{4};
-    inline constexpr std::string_view kFrontLeftOffsetKey = "kFrontLeftOffset";
-    // ...
-}
-```
-
-Use `inline constexpr` for string constants to avoid ODR violations. Use `const` (not `constexpr`) for non-literal types like `frc::Rotation2d` and `frc::Translation2d`.
-
-## Lambda Usage
-
-Lambdas are used extensively for command-based bindings:
-```cpp
-// Default drive command
-m_swerveDrive.SetDefaultCommand(frc2::RunCommand([this] { /* axis reading */ }, {&m_swerveDrive}));
-
-// Button binding
-frc2::JoystickButton(&m_driverController, 1)
-    .OnTrue(frc2::CommandPtr(frc2::InstantCommand([this] { return m_swerveDrive.ResetHeading(); })));
-```
-
-Capture `[this]` for member access. Use `[/* this */]` to suppress capture-not-used warnings when the lambda body is a placeholder.
-
-## Simulation Support
-
-All hardware-interacting code uses `if constexpr (frc::RobotBase::IsSimulation())` guards for simulation-specific paths. This is compile-time branching, not runtime checks.
-
-```cpp
-if constexpr (frc::RobotBase::IsSimulation()) {
-    m_simTimer.Start();
-}
-```
-
-## Commented-Out Code
-
-The codebase contains significant amounts of commented-out code (disabled subsystems, alternative hardware configurations, deprecated features). This is an accepted practice for robot code where hardware configurations change season-to-season. Keep such blocks clearly marked with a reason comment (e.g., `// uncomment if there is no CANivore being utilized`).
+**Comments:**
+- Copyright header on every file (WPILib BSD license block)
+- Doxygen-style `/** ... */` block comments on public methods in headers
+- Inline `//` comments in `.cpp` for implementation guidance
+- Template/placeholder comments use `/* this */` syntax within lambdas: `[/* this */] { /* one-time action */ }`
 
 ## Error Handling
 
-**Strategy:** None explicit. This is embedded/real-time code — exceptions are not used. The WPILib framework handles hardware errors internally. Errors are surfaced via SmartDashboard/DataLog.
+**Strategy:** No exception-based error handling in this codebase. WPILib robot code runs on a real-time loop — exceptions are generally avoided.
 
 **Patterns:**
-- No `try`/`catch` in robot code (exception overhead unacceptable at 20ms loop rate).
-- Hardware initialization errors surface through WPILib's HAL error reporting.
-- `std::optional<wpi::cmd::CommandPtr>` used for autonomous command to safely handle the "no command" case.
-- Python calibration utilities use `try`/`except` around file I/O.
+- `std::optional<wpi::cmd::CommandPtr>` used to safely represent absent autonomous command, with `if (autonomousCommand)` guard before use
+- HAL initialization (`HAL_Initialize`) called before test runner in `src/test/cpp/main.cpp` — required for WPILib simulation to function
 
-## Logging
+## Module Design
 
-**Framework:** `frc::DataLogManager` (WPILib binary data log) + `frc::SmartDashboard`/`frc::Shuffleboard` for live dashboard display.
+**Subsystem ownership:** `RobotContainer` owns subsystems by value. Commands receive raw pointers to subsystems.
 
-**Patterns:**
-- `frc::DataLogManager::Start()` called in `RobotInit()`.
-- Structured log entries created for PDP metrics: `wpi::log::DoubleLogEntry m_VoltageLog`.
-- `SmartDashboard::PutNumber/PutString/PutBoolean/PutData` used throughout `Periodic()` calls for live telemetry.
-- No `std::cout` or `printf` in production code (though `<iostream>` is included in some headers).
-
-## Comments
-
-**When to Comment:**
-- All public class members and methods get a brief Javadoc-style comment block.
-- Hardware alternate configurations are documented inline with `// uncomment if...`.
-- TODO comments mark items needing attention: `// TODO: retune constants`.
-- `NOTE:` prefix used for important architectural observations.
-
-**Comment Style:**
-```cpp
-/**
- * Will be called periodically whenever the CommandScheduler runs.
- */
-void Periodic() override;
-```
-
-Single-line comments use `//` with a space after.
-
-## Python (PathCalibrator)
-
-Python files in `122-Swerve-Template/PathCalibrator/` follow standard Python conventions:
-- Type hints used: `Dict[str, Waypoint]`, `List[Any]`.
-- Docstrings on module-level functions.
-- `pathlib.Path` for file operations.
-- `argparse` for CLI argument parsing.
+**Scheduler:** `wpi::cmd::CommandScheduler::GetInstance().Run()` called once per `RobotPeriodic()` — single global scheduler drives all command execution.
 
 ---
 
